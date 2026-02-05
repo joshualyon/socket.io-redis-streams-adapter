@@ -13,8 +13,6 @@ import { hasBinary, GETDEL, SET, XADD, XRANGE, XREAD } from "./util";
 
 const debug = debugModule("socket.io-redis-streams-adapter");
 
-const RESTORE_SESSION_MAX_XRANGE_CALLS = 100;
-
 export interface RedisStreamsAdapterOptions {
   /**
    * The name of the Redis stream.
@@ -27,7 +25,8 @@ export interface RedisStreamsAdapterOptions {
    */
   maxLen?: number;
   /**
-   * The number of elements to fetch per XREAD call.
+   * The number of elements to fetch per XREAD call (polling) and per XRANGE
+   * call (session recovery).
    * @default 100
    */
   readCount?: number;
@@ -273,14 +272,20 @@ class RedisStreamsAdapter extends ClusterAdapterWithHeartbeat {
 
     session.missedPackets = [];
 
-    // FIXME we need to add an arbitrary limit here, because if entries are added faster than what we can consume, then
-    // we will loop endlessly. But if we stop before reaching the end of the stream, we might lose messages.
-    for (let i = 0; i < RESTORE_SESSION_MAX_XRANGE_CALLS; i++) {
+    // Limit iterations to prevent infinite loops when entries are added faster
+    // than we can consume. With COUNT on each XRANGE call, we need enough
+    // iterations to traverse the full stream plus headroom for entries added
+    // during recovery.
+    const maxXrangeCalls =
+      Math.ceil(this.#opts.maxLen / this.#opts.readCount) * 2;
+
+    for (let i = 0; i < maxXrangeCalls; i++) {
       const entries = await XRANGE(
         this.#redisClient,
         this.#opts.streamName,
         RedisStreamsAdapter.nextOffset(offset),
-        "+"
+        "+",
+        this.#opts.readCount
       );
 
       if (entries.length === 0) {

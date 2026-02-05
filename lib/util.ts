@@ -134,11 +134,20 @@ export function XRANGE(
   redisClient: any,
   streamName: string,
   start: string,
-  end: string
+  end: string,
+  count?: number
 ) {
   if (isRedisV4Client(redisClient)) {
-    return redisClient.xRange(streamName, start, end);
+    const options = count ? { COUNT: count } : undefined;
+    return redisClient.xRange(streamName, start, end, options);
   } else {
+    if (count) {
+      return redisClient
+        .xrange(streamName, start, end, "COUNT", count)
+        .then((res) => {
+          return res.map(mapResult);
+        });
+    }
     return redisClient.xrange(streamName, start, end).then((res) => {
       return res.map(mapResult);
     });
